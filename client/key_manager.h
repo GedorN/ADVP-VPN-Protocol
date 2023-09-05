@@ -9,6 +9,8 @@
 
 
 #define SECURITY_WORD "O RATO ROEU A ROUPA DO REI DE ROMA"
+#define SERVER_SECURITY_WORD "A ROUPA DO REI DE ROMA FOI ROIDA PELO RATO"
+
 
 int generate_and_save_keys(const char *public_key_filename, const char *private_key_filename, int bits);
 RSA *load_public_key(const char *file_name);

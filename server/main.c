@@ -3,15 +3,34 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <time.h>
 #include "stream_manipulation.h"
 #include "key_manager.h"
 
+typedef struct {
+  int message_lenght;
+  unsigned char message[4096];
+  time_t timestamp;
+  unsigned char key[16];
+} HandshakePackage;
+void print_data(const char *title, const void *data, int len) {
+    printf("%s", title);
+    const unsigned char *p = (const unsigned char *)data;
+    int i = 0;
+
+    for (; i < len; ++i)
+        printf("%02X ", *p++);
+
+    printf("\n");
+}
 
 int main() {
     // char command[50];
     // sprintf(command, "lsof -ti:8080 | xargs kill -9 &", PORT);
     // printf("Olha o comando ai: %s\n", command);
     // system(command);
+    OpenSSL_add_all_algorithms();
+    ERR_load_crypto_strings();
     int server_fd, new_socket;
     struct sockaddr_in address;
     int addrlen = sizeof(address);
@@ -54,60 +73,59 @@ int main() {
         perror("Falha no accept");
         exit(EXIT_FAILURE);
     }
-    RSA *public_key = load_public_key("public_key_client.pem");
+
+    RSA *private_key = load_private_key("private_key.pem");
+
+    if (private_key == NULL) {
+      fprintf(stderr, "Falha ao carregar chaves.\n");
+      return 1;
+    }
+
+    RSA *public_key = load_public_key("../client/public_key.pem");
+    RSA *my_public_key = load_public_key("public_key.pem");
+
     int encrypted_len;
     int decrypted_len;
     unsigned char encrypted[4096];
     unsigned char decrypted[4096];
-    ssize_t bytes_read = read(new_socket, &encrypted_len, sizeof(encrypted_len));  // Deixando espaço para o terminador nulo
-    bytes_read = read(new_socket, &encrypted, sizeof(encrypted));  // Deixando espaço para o terminador nulo
+    unsigned char aux_decrypted[4096];
+    int security_word_granted = 0;
+    HandshakePackage package;
+    ssize_t bytes_read = read(new_socket, &package, sizeof(package));  // Deixando espaço para o terminador nulo
+    // bytes_read = read(new_socket, &encrypted, sizeof(encrypted));  // Deixando espaço para o terminador nulo
   
+
+    printf("E aqui? %s\n", package.message);
+    decrypted_len = RSA_public_decrypt(package.message_lenght, package.message, decrypted, public_key, RSA_PKCS1_PADDING);
 
     if (decrypted_len == -1) {
         fprintf(stderr, "Falha na descriptografia: %s\n", ERR_error_string(ERR_get_error(), NULL));
         return 1;
     }
-
-    printf("E aqui? %s\n", encrypted);
-    decrypted_len = RSA_public_decrypt(encrypted_len, encrypted, decrypted, public_key, RSA_PKCS1_PADDING);
-    printf("tamanho recebido: %d\n", encrypted_len);
+    printf("tamanho recebido: %d\n", package.message_lenght);
     printf("Mensagem descriptografada: %s\n", decrypted);
+    time_t current_timestamp = time(NULL);
+    HandshakePackage response;
+    if (strcmp(decrypted, SECURITY_WORD) == 0 && (current_timestamp - package.timestamp) <= SECURITY_WORD_TOLERANCE_DELAY) {
+        security_word_granted = 1;
+        response.message_lenght = RSA_private_encrypt(strlen(SERVER_SECURITY_WORD) + 1, (unsigned char*)SERVER_SECURITY_WORD, response.message, private_key, RSA_PKCS1_PADDING);
+        printf("A mensagem antes de ser enviada: %s\n", response.message);
+        printf("Tamanho resposta: %d\n", response.message_lenght);
+        RSA_public_decrypt(response.message_lenght, response.message, aux_decrypted, my_public_key, RSA_PKCS1_PADDING);
+        printf("Resposta descriptografada: %s\n", aux_decrypted);
+        // send(new_socket, &response, sizeof(response), 0);
+    } else {
+        response.message_lenght = RSA_private_encrypt(strlen("-") + 1, (unsigned char*)"-", response.message, private_key, RSA_PKCS1_PADDING);
+    }
+    send(new_socket, &response, sizeof(response), 0);
+    HandshakePackage key_exchange;
+
+    bytes_read = read(new_socket, &key_exchange, sizeof(key_exchange));
+    print_data("\n Chave aleatória:", key_exchange.key, sizeof(key_exchange.key));
     RSA_free(public_key);
-
-    // Inicializa o buffer com zeros para garantir que os dados recebidos formem uma string válida
-    // memset(signed_message_buffer, 0, sizeof(signed_message_buffer));
-
-    
-    // if (bytes_read < 0) {
-    //     perror("Erro na leitura do socket");
-    //     close(new_socket);
-    //     return;
-    // }
-    // // Imprime a mensagem recebida
-    // for (unsigned int i = 0; i < 256; ++i) {
-    //     printf("%02x", signed_message_buffer[i]);
-    // }
-    // bytes_read = read(new_socket, &sig_len, sizeof(sig_len));
-    //  if (bytes_read < 0) {
-    //     perror("Erro na leitura do socket");
-    //     close(new_socket);
-    //     return;
-    // }
-
-    // if (bytes_read < sizeof(sig_len)) {
-    //     fprintf(stderr, "Dados insuficientes lidos do socket.\n");
-    //     close(new_socket);
-    //     return;
-    // }
-    // sig_len = ntohl(sig_len);
-    // printf("\nTam: %d\n", sig_len);
-    // const char* msg = "Hello, world!";
-    // if (verify_signature(msg, signed_message_buffer, sig_len, public_key)) {
-    //     printf("A assinatura é válida.\n");
-    // } else {
-    //     printf("A assinatura é inválida.\n");
-    // }
-    close(new_socket);
+ 
+    RSA_free(private_key);
+    // close(new_socket);
 
     // while (1) {
     //   char buffer[MESSAGE_CHUNK_SIZE] = {0};  // Buffer temporário para receber a string
